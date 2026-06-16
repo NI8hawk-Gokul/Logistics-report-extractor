@@ -1,0 +1,27 @@
+# Backend Dependencies
+fastapi==0.95.0
+pandas==2.0.3
+python-dotenv==1.0.1
+google-generativeai
+scikit-learn
+prophet
+pyod
+transformers
+torch
+reportlab
+openpyxl
+xlrd
+xmltodict
+pymongo==4.2.0
+uvicorn[standard]==0.22.0
+python-multipart
+python-jose[cryptography]
+passlib
+bcrypt
+matplotlib
+seaborn
+plotly
+joblib
+requests
+aiofiles
+pytest

@@ -1,0 +1,12 @@
+fastapi
+uvicorn[standard]
+motor
+pandas
+openpyxl
+reportlab
+python-jose[cryptography]
+passlib[bcrypt]
+python-multipart
+python-dotenv
+prophet
+pyod
