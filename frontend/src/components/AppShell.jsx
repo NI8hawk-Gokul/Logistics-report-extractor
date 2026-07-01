@@ -5,14 +5,17 @@ import ThemeToggle from "./ThemeToggle";
 const icons = {
   overview: "M3 12 12 3l9 9v8a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z",
   analytics: "M4 19V9m6 10V5m6 14v-7m5 7H3",
+  clientAnalytics: "M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2M9 7a4 4 0 1 0 0-8 4 4 0 0 0 0 8M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75",
+  predictionAnalysis: "M23 6l-9.5 9.5-5-5L1 18M17 6h6v6",
   reports: "M6 3h9l5 5v13H6zM14 3v6h6M9 13h8M9 17h8",
+  versionComparison: "M16 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h6M19 19v-6h2v6M15 19v-4h2v4M11 19v-8h2v8",
   upload: "M12 16V4m0 0L7 9m5-5 5 5M5 20h14",
   templates: "M5 3h14v18H5zM8 7h8M8 11h8M8 15h5",
   schedules: "M4 5h16v16H4zM8 3v4m8-4v4M4 10h16m-8 3v4l3 2",
   operations: "M4 7h16M7 3v4m10-4v4M5 11h6v9H5zm10 0h4v4h-4zm0 7h4v2h-4z",
   documents: "M6 3h9l5 5v13H6zM14 3v6h6M9 13h6M9 17h6",
   notifications: "M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4",
-  settings: "M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6zm-1.6 4.3a8.9 8.9 0 0 1-1.6-.9l-1.3.8a1 1 0 0 1-1.2-.2l-.8-.8a1 1 0 0 1-.2-1.2l.8-1.3a8.9 8.9 0 0 1-.9-1.6l-1.5-.2a1 1 0 0 1-.8-.9v-1.1a1 1 0 0 1 .8-.9l1.5-.2a8.9 8.9 0 0 1 .9-1.6l-.8-1.3a1 1 0 0 1 .2-1.2l.8-.8a1 1 0 0 1 1.2-.2l1.3.8c.5-.3 1-.6 1.6-.9l.2-1.5a1 1 0 0 1 .9-.8h1.1a1 1 0 0 1 .9.8l.2 1.5c.5.3 1 .6 1.6.9l1.3-.8a1 1 0 0 1 1.2.2l.8.8a1 1 0 0 1 .2 1.2l-.8 1.3c.3.5.6 1 .9 1.6l1.5.2a1 1 0 0 1 .8.9v1.1a1 1 0 0 1-.8.9l-1.5.2a8.9 8.9 0 0 1-.9 1.6l.8 1.3a1 1 0 0 1-.2 1.2l-.8.8a1 1 0 0 1-1.2.2l-1.3-.8a8.9 8.9 0 0 1-1.6.9l-.2 1.5a1 1 0 0 1-.9.8h-1.1a1 1 0 0 1-.9-.8z",
+  settings: "M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6zm-1.6 4.3a8.9 8.9 0 0 1-1.6-.9l-1.3.8a1 1 0 0 1-1.2-.2l-.8-.8a1 1 0 0 1-.8-1.2l.8-1.3a8.9 8.9 0 0 1-.9-1.6l-1.5-.2a1 1 0 0 1-.8-.9v-1.1a1 1 0 0 1 .8-.9l1.5-.2a8.9 8.9 0 0 1 .9-1.6l-.8-1.3a1 1 0 0 1 .2-1.2l.8-.8a1 1 0 0 1 1.2-.2l1.3.8c.5-.3 1-.6 1.6-.9l.2-1.5a1 1 0 0 1 .9-.8h1.1a1 1 0 0 1 .9.8l.2 1.5c.5.3 1 .6 1.6.9l1.3-.8a1 1 0 0 1 1.2.2l.8.8a1 1 0 0 1 .2 1.2l-.8 1.3c.3.5.6 1 .9 1.6l1.5.2a1 1 0 0 1 .8.9v1.1a1 1 0 0 1-.8.9l-1.5.2a8.9 8.9 0 0 1-.9 1.6l.8 1.3a1 1 0 0 1-.2 1.2l-.8.8a1 1 0 0 1-1.2.2l-1.3-.8a8.9 8.9 0 0 1-1.6.9l-.2 1.5a1 1 0 0 1-.9.8h-1.1a1 1 0 0 1-.9-.8z",
   admin: "M12 3l8 4v5c0 5-3.4 8.7-8 10-4.6-1.3-8-5-8-10V7zM9 12l2 2 4-5",
   logs: "M5 4h14v16H5zM8 8h8M8 12h8M8 16h5",
 };
@@ -31,7 +34,10 @@ const navGroups = [
     items: [
       ["overview", "Overview"],
       ["analytics", "Data analysis"],
+      ["clientAnalytics", "Client analysis"],
+      ["predictionAnalysis", "AI prediction analysis"],
       ["reports", "Reports"],
+      ["versionComparison", "Version comparison", ["Admin", "Manager"]],
     ],
   },
   {
@@ -68,6 +74,7 @@ export default function AppShell({
   selectedReportId,
   onReportChange,
   onLogout,
+  dbMode,
 }) {
   const [mobileOpen, setMobileOpen] = useState(false);
   const [search, setSearch] = useState("");
@@ -127,7 +134,14 @@ export default function AppShell({
 
         <nav className="sidebar-nav" aria-label="Main navigation">
           {navGroups.map((group) => {
-            const visible = group.items.filter(([, , roles]) => !roles || roles.includes(user.role));
+            const currentVersion = versions.find((v) => v.reportId === selectedReportId);
+            const department = currentVersion?.department;
+            const isClientAnalysisVisible = !department || ["Operations", "Customs Clearance", "Documentation", "Sales & Marketing"].includes(department);
+            
+            let visible = group.items.filter(([, , roles]) => !roles || roles.includes(user.role));
+            if (!isClientAnalysisVisible) {
+              visible = visible.filter(([key]) => key !== "clientAnalytics");
+            }
             if (!visible.length) return null;
             return (
               <div className="nav-group" key={group.label}>
@@ -155,6 +169,24 @@ export default function AppShell({
       </aside>
 
       <section className="workspace">
+        {dbMode === "memory" && (
+          <div className="db-warning-banner" style={{
+            background: "#fffbeb",
+            color: "#b45309",
+            padding: "10px 16px",
+            textAlign: "center",
+            fontSize: "13px",
+            fontWeight: "600",
+            borderBottom: "1.5px solid #fde047",
+            display: "flex",
+            justifyContent: "center",
+            alignItems: "center",
+            gap: "8px"
+          }}>
+            <span>⚠️</span>
+            <span>MongoDB not connected. App is running in demo mode only. Large uploads are disabled.</span>
+          </div>
+        )}
         <header className="topbar">
           <button className="mobile-menu" onClick={() => setMobileOpen(true)} aria-label="Open navigation">☰</button>
           <div className="topbar-title">
@@ -210,3 +242,4 @@ export default function AppShell({
 }
 
 export { Icon };
+

@@ -39,6 +39,7 @@ from models import (
     PasswordChangeRequest,
     SettingsUpdateRequest,
     UserCreateRequest,
+    UserRoleUpdateRequest,
 )
 
 router = APIRouter()
@@ -218,7 +219,7 @@ def register_detail_routes():
         async def delete_item(item_id: str, user: dict = Depends(get_current_user)):
             require_admin(user)
             await collection.delete_one({"_id": parse_object_id(item_id)})
-            await create_activity_log(user, "RECORD_DELETED", f"Deleted {resource_name} record {item_id}")
+            await create_activity_log(user, "DATA_DELETED", f"Deleted {resource_name} record {item_id}")
             return {"message": "Record deleted"}
 
         return get_item, delete_item
@@ -455,34 +456,72 @@ async def create_user(
         "createdAt": datetime.now(timezone.utc).isoformat(),
     }
     await users_collection.insert_one(document)
+    await create_activity_log(
+        user,
+        "ROLE_CHANGED",
+        f"Created user {request.email} with role {request.role}"
+    )
     return serialize_document(document)
 
 
 @router.patch("/users/{user_id}/deactivate")
 async def deactivate_user(user_id: str, user: dict = Depends(get_current_user)):
     require_admin(user)
+    target = await users_collection.find_one({"_id": parse_object_id(user_id)})
+    email = target.get("email") if target else user_id
     await users_collection.update_one(
         {"_id": parse_object_id(user_id)},
         {"$set": {"isActive": False}},
     )
+    await create_activity_log(user, "ROLE_CHANGED", f"Deactivated user account {email}")
     return {"message": "User deactivated"}
 
 
 @router.patch("/users/{user_id}/reactivate")
 async def reactivate_user(user_id: str, user: dict = Depends(get_current_user)):
     require_admin(user)
+    target = await users_collection.find_one({"_id": parse_object_id(user_id)})
+    email = target.get("email") if target else user_id
     await users_collection.update_one(
         {"_id": parse_object_id(user_id)},
         {"$set": {"isActive": True}},
     )
+    await create_activity_log(user, "ROLE_CHANGED", f"Reactivated user account {email}")
     return {"message": "User reactivated"}
 
 
 @router.delete("/users/{user_id}")
 async def delete_user(user_id: str, user: dict = Depends(get_current_user)):
     require_admin(user)
+    target = await users_collection.find_one({"_id": parse_object_id(user_id)})
+    email = target.get("email") if target else user_id
     await users_collection.delete_one({"_id": parse_object_id(user_id)})
+    await create_activity_log(user, "ROLE_CHANGED", f"Deleted user account {email}")
     return {"message": "User deleted"}
+
+
+@router.patch("/users/{user_id}/role")
+async def update_user_role(
+    user_id: str,
+    request: UserRoleUpdateRequest,
+    user: dict = Depends(get_current_user),
+):
+    require_admin(user)
+    target_user = await users_collection.find_one({"_id": parse_object_id(user_id)})
+    if not target_user:
+        raise HTTPException(status_code=404, detail="User not found")
+    old_role = target_user.get("role", "Unknown")
+    new_role = request.role
+    await users_collection.update_one(
+        {"_id": parse_object_id(user_id)},
+        {"$set": {"role": new_role}}
+    )
+    await create_activity_log(
+        user,
+        "ROLE_CHANGED",
+        f"Updated role of user {target_user['email']} from {old_role} to {new_role}"
+    )
+    return {"message": "User role updated successfully"}
 
 
 @router.get("/profile")

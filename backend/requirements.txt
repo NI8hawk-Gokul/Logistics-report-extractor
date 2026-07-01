@@ -10,3 +10,4 @@ python-multipart
 python-dotenv
 prophet
 pyod
+scikit-learn

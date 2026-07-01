@@ -1,0 +1,3 @@
+Job No,Date,Client Name,Agent Name,Shipment Type,Status,Delay Reason,Remarks,Billing Amount,Expense,Profit
+JOB-101,2026-06-10,Acme Corp,John Agent,FCL,Completed,,Smooth delivery,120000,90000,30000
+JOB-102,2026-06-11,Apex Industries,Sarah Agent,LCL,Pending,Customs clearance delay,Pending status,80000,70000,10000

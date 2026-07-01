@@ -203,8 +203,9 @@ td strong { color: var(--text-heading); }
 
 .stepper { display: grid; grid-template-columns: repeat(3, 1fr); max-width: 660px; margin-bottom: 20px; }
 .stepper div { display: flex; align-items: center; gap: 8px; color: var(--text-muted); position: relative; font-size: 11px; }
-.stepper div:not(:last-child)::after { content: ""; position: absolute; left: 32px; right: 9px; top: 13px; height: 2px; background: var(--border-color); }
-.stepper span { position: relative; z-index: 1; width: 27px; height: 27px; display: grid; place-items: center; border-radius: 50%; background: white; border: 2px solid var(--border-color); font-weight: 800; }
+.stepper div:not(:last-child)::after { content: ""; position: absolute; left: 32px; right: 9px; top: 13px; height: 2px; background: var(--border-color); z-index: 1; }
+.stepper span { position: relative; z-index: 2; width: 27px; height: 27px; display: grid; place-items: center; border-radius: 50%; background: var(--bg-main); border: 2px solid var(--border-color); font-weight: 800; }
+.stepper strong { position: relative; z-index: 2; background: var(--bg-main); padding-right: 8px; }
 .stepper div.active { color: var(--text-heading); }
 .stepper div.active span { background: var(--primary); color: white; border-color: var(--primary); }
 .stepper div.active::after { background: #9ba5f9; }
@@ -390,3 +391,82 @@ td strong { color: var(--text-heading); }
   .demo-accounts div { margin-top: 8px; }
   .ai-launcher { right: 15px; bottom: 15px; }
 }
+
+/* Risk Badges */
+.risk-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  padding: 1px 5px;
+  border-radius: 3px;
+  margin-top: 3px;
+}
+
+.risk-high {
+  background-color: #fee2e2;
+  color: #b91c1c;
+}
+.dark .risk-high, .dark-mode .risk-high, [data-theme="dark"] .risk-high {
+  background-color: #7f1d1d;
+  color: #fecaca;
+}
+
+.risk-medium {
+  background-color: #fef3c7;
+  color: #d97706;
+}
+.dark .risk-medium, .dark-mode .risk-medium, [data-theme="dark"] .risk-medium {
+  background-color: #78350f;
+  color: #fde68a;
+}
+
+.risk-low {
+  background-color: #dcfce7;
+  color: #15803d;
+}
+.dark .risk-low, .dark-mode .risk-low, [data-theme="dark"] .risk-low {
+  background-color: #14532d;
+  color: #bbf7d0;
+}
+
+/* Dynamic Dashboard Grid */
+.dynamic-dashboard-grid {
+  display: grid;
+  grid-template-columns: repeat(12, 1fr);
+  gap: 18px;
+  width: 100%;
+}
+
+.dashboard-widget {
+  transition: all 0.2s ease-in-out;
+}
+
+.dashboard-widget.size-full {
+  grid-column: span 12;
+}
+
+.dashboard-widget.size-half {
+  grid-column: span 6;
+}
+
+@media (max-width: 900px) {
+  .dashboard-widget.size-half {
+    grid-column: span 12;
+  }
+}
+
+@keyframes wave {
+  0%, 100% {
+    transform: scaleY(0.4);
+  }
+  50% {
+    transform: scaleY(1);
+  }
+}
+
+
+

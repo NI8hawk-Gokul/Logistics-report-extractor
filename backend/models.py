@@ -23,6 +23,10 @@ class FilterRequest(BaseModel):
     )
     searchText: str = ""
     reportId: str = ""
+    page: Optional[int] = None
+    pageSize: Optional[int] = None
+    sortBy: Optional[str] = None
+    sortOrder: Optional[str] = None
 
 class ColumnMappingRequest(BaseModel):
     reportId: str
@@ -141,3 +145,7 @@ class ApprovalCreateRequest(BaseModel):
     targetId: str
     description: str
     amount: Optional[float] = None
+
+
+class UserRoleUpdateRequest(BaseModel):
+    role: str

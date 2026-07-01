@@ -45,12 +45,39 @@ from reportlab.lib import colors
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 
+from routes.clients import router as clients_router
 app = FastAPI(title="Smart Logistics Portal API")
+app.include_router(clients_router)
 app.include_router(extended_router)
 from routes.forecast import router as forecast_router
 app.include_router(forecast_router)
 from routes.models import router as models_router
 app.include_router(models_router)
+from routes.prediction import router as prediction_router
+app.include_router(prediction_router)
+from routes.reports_compare import router as reports_compare_router
+app.include_router(reports_compare_router)
+from routes.backup_engine import router as backup_engine_router
+app.include_router(backup_engine_router)
+from routes.schemas import router as schemas_router
+app.include_router(schemas_router)
+
+@app.on_event("startup")
+async def startup_db_indexes():
+    # If in MongoDB mode, create indexes
+    from database import ACTIVE_DATABASE_MODE, reports_collection
+    if ACTIVE_DATABASE_MODE == "mongodb":
+        try:
+            await reports_collection.create_index("reportId")
+            await reports_collection.create_index("jobNo")
+            await reports_collection.create_index("date")
+            await reports_collection.create_index("agentName")
+            await reports_collection.create_index("clientName")
+            print("MongoDB indexes created successfully.")
+        except Exception as e:
+            print("Warning: MongoDB index creation failed:", e)
+
+
 
 # Setup CORS
 app.add_middleware(
@@ -159,32 +186,70 @@ async def me(user: dict = Depends(get_current_user)):
 
 # ----------------- UPLOAD & MAP ENDPOINTS -----------------
 @app.post("/upload-preview")
-async def upload_preview(file: UploadFile = File(...), user: dict = Depends(get_current_user)):
+async def upload_preview(
+    file: UploadFile = File(...),
+    department: str = Form("Operations"),
+    user: dict = Depends(get_current_user)
+):
     if user["role"] != "Admin":
         raise HTTPException(status_code=403, detail="Only Admins can upload files")
         
-    if not file.filename.endswith((".xlsx", ".csv")):
-        raise HTTPException(status_code=400, detail="Only Excel (.xlsx) or CSV (.csv) files are allowed")
-        
+    filename_lower = file.filename.lower()
     contents = await file.read()
-    if file.filename.endswith(".xlsx"):
-        df = pd.read_excel(io.BytesIO(contents))
+    
+    # Check if the uploaded file is a PDF or an Image
+    is_document = filename_lower.endswith((".pdf", ".png", ".jpg", ".jpeg"))
+    
+    if is_document:
+        if filename_lower.endswith(".pdf"):
+            mime_type = "application/pdf"
+        elif filename_lower.endswith(".png"):
+            mime_type = "image/png"
+        else:
+            mime_type = "image/jpeg"
+            
+        from ai_engine import extract_table_from_document
+        extracted_rows = extract_table_from_document(contents, file.filename, mime_type, department)
+        if not extracted_rows:
+            raise HTTPException(status_code=400, detail="Could not extract any structured rows from the document.")
+            
+        df = pd.DataFrame(extracted_rows)
+        # Convert df to CSV bytes
+        csv_buffer = io.StringIO()
+        df.to_csv(csv_buffer, index=False)
+        stored_bytes = csv_buffer.getvalue().encode("utf-8")
+        filename_for_storage = file.filename + ".csv"
     else:
-        df = pd.read_csv(io.BytesIO(contents))
+        if not filename_lower.endswith((".xlsx", ".csv")):
+            raise HTTPException(status_code=400, detail="Only Excel (.xlsx), CSV (.csv), PDF, or image files are allowed")
+            
+        if filename_lower.endswith(".xlsx"):
+            df = pd.read_excel(io.BytesIO(contents))
+        else:
+            df = pd.read_csv(io.BytesIO(contents))
+            
+        stored_bytes = contents
+        filename_for_storage = file.filename
         
     df = df.fillna("")
+    
+    from database import ACTIVE_DATABASE_MODE
+    if ACTIVE_DATABASE_MODE == "memory" and len(df) > 500:
+        raise HTTPException(
+            status_code=400,
+            detail="Large uploads (>500 rows) are disabled in Memory Demo Mode. Please connect MongoDB to run in production mode."
+        )
+        
     preview_rows = df.head(10).to_dict(orient="records")
     
-    # Temporarily cache file in memory/disk or return data
-    # For preview, we return columns and preview rows
-    await create_activity_log(user, "REPORT_PREVIEW_GENERATED", f"Generated preview for {file.filename}")
+    await create_activity_log(user, "REPORT_PREVIEW_GENERATED", f"Generated preview for {file.filename} ({department})")
     
-    # Store binary temp file contents in a temp vault to access it in confirm mapping
+    # Store binary temp file contents
     temp_id = str(ObjectId())
     await documents_collection.insert_one({
         "tempId": temp_id,
-        "filename": file.filename,
-        "fileBytes": contents,
+        "filename": filename_for_storage,
+        "fileBytes": stored_bytes,
         "createdAt": datetime.now(timezone.utc).isoformat()
     })
     
@@ -194,6 +259,134 @@ async def upload_preview(file: UploadFile = File(...), user: dict = Depends(get_
         "uploadedColumns": list(df.columns),
         "previewRows": preview_rows
     }
+
+
+def to_camel_case(s: str) -> str:
+    special = {
+        "Job No": "jobNo",
+        "Vehicle No": "vehicleNo",
+        "AWB No": "awbNo",
+        "BOE No": "boeNo",
+        "SKU": "sku",
+        "HS Code": "hsCode",
+        "Employee ID": "employeeId",
+        "Audit ID": "auditId",
+        "P&L Amount": "plAmount",
+        "KPI Metric": "kpiMetric"
+    }
+    if s in special:
+        return special[s]
+    import re
+    words = re.split(r'[^a-zA-Z0-9]+', s)
+    words = [w for w in words if w]
+    if not words:
+        return ""
+    return words[0].lower() + "".join(w.capitalize() for w in words[1:])
+
+def get_standard_fields_mapping(department: str) -> Dict[str, str]:
+    if department == "Operations":
+        return {
+            "Job No": "jobNo",
+            "Date": "date",
+            "Client Name": "clientName",
+            "Agent Name": "agentName",
+            "Shipment Type": "jobType",
+            "Status": "status",
+            "Billing Amount": "billingAmount",
+            "Expense": "expense",
+            "Profit": "profit"
+        }
+    elif department == "Transportation / Fleet":
+        return {
+            "Vehicle No": "jobNo",
+            "Trip Date": "date",
+            "Driver Name": "agentName",
+            "Route": "jobType",
+            "Delivery Status": "status",
+            "Fuel Used": "billingAmount",
+            "Maintenance Cost": "expense"
+        }
+    elif department == "Warehouse":
+        return {
+            "Item Name": "jobNo",
+            "Inward Date": "date",
+            "SKU": "jobType",
+            "Warehouse Location": "agentName",
+            "Damage Status": "status",
+            "Quantity": "billingAmount",
+            "Stock Balance": "profit"
+        }
+    elif department == "Air Freight":
+        return {
+            "AWB No": "jobNo",
+            "Airline Name": "agentName",
+            "Flight No": "jobType",
+            "Status": "status",
+            "Cargo Weight": "billingAmount",
+            "Freight Cost": "expense"
+        }
+    elif department == "Customs Clearance":
+        return {
+            "BOE No": "jobNo",
+            "Customs Date": "date",
+            "Importer/Exporter Name": "clientName",
+            "HS Code": "jobType",
+            "Clearance Status": "status",
+            "Duty Amount": "billingAmount"
+        }
+    elif department == "Documentation":
+        return {
+            "Document No": "jobNo",
+            "Issue Date": "date",
+            "Client Name": "clientName",
+            "Document Type": "jobType",
+            "Status": "status"
+        }
+    elif department == "Sales & Marketing":
+        return {
+            "Lead Name": "jobNo",
+            "Follow-up Date": "date",
+            "Client Name": "clientName",
+            "Sales Executive": "agentName",
+            "Status": "status",
+            "Quotation Amount": "billingAmount"
+        }
+    elif department == "HR":
+        return {
+            "Employee ID": "jobNo",
+            "Joining Date": "date",
+            "Employee Name": "agentName",
+            "Designation": "jobType",
+            "Attendance": "status",
+            "Salary": "billingAmount",
+            "Leave Days": "expense"
+        }
+    elif department == "IT / Software":
+        return {
+            "User Name": "jobNo",
+            "Login Time": "date",
+            "Role": "agentName",
+            "Module Name": "jobType",
+            "Error Type": "status"
+        }
+    elif department == "Compliance / Audit":
+        return {
+            "Audit ID": "jobNo",
+            "Audit Date": "date",
+            "Checked By": "agentName",
+            "Department": "jobType",
+            "Risk Level": "status"
+        }
+    elif department == "Management / Admin":
+        return {
+            "Report Name": "jobNo",
+            "Branch": "agentName",
+            "Department": "jobType",
+            "Status": "status",
+            "P&L Amount": "billingAmount",
+            "Pending Approvals": "expense"
+        }
+    return {}
 
 @app.post("/confirm-column-mapping")
 async def confirm_column_mapping(req: Dict[str, Any], user: dict = Depends(get_current_user)):
@@ -205,9 +398,15 @@ async def confirm_column_mapping(req: Dict[str, Any], user: dict = Depends(get_c
     report_name = req.get("reportName", "New Logistics Report")
     period = req.get("period", "Current")
     description = req.get("description", "")
+    department = req.get("department", "Operations")
     
     if not temp_id or not mapping:
         raise HTTPException(status_code=400, detail="Missing mapping parameters")
+        
+    from routes.schemas import DEPARTMENTS_SCHEMAS
+    dept_schema = DEPARTMENTS_SCHEMAS.get(department)
+    if not dept_schema:
+        raise HTTPException(status_code=400, detail=f"Invalid department selected: {department}")
         
     temp_file = await documents_collection.find_one({"tempId": temp_id})
     if not temp_file:
@@ -230,66 +429,199 @@ async def confirm_column_mapping(req: Dict[str, Any], user: dict = Depends(get_c
     df = df.rename(columns=rename_dict)
     
     # Ensure system columns exist, otherwise fill with defaults
-    required_fields = ["Agent Name", "Client Name", "Job Type", "Status", "Job No", "Billing Amount", "Expense", "Profit", "Date"]
-    for field in required_fields:
+    for field in dept_schema["fields"]:
         if field not in df.columns:
-            if field in ["Billing Amount", "Expense", "Profit"]:
+            if field in dept_schema["numeric"]:
                 df[field] = 0.0
-            elif field == "Date":
+            elif field in dept_schema["date"]:
                 df[field] = datetime.now(timezone.utc).strftime("%Y-%m-%d")
             else:
                 df[field] = "N/A"
                 
     # Normalize Branch & Department columns if they exist
-    # If not mapped, map to default or parse if present
     branch_col = next((c for c in df.columns if c.lower() == "branch"), None)
     if not branch_col:
         df["Branch"] = "Chennai"  # Default
     else:
         df["Branch"] = df[branch_col].astype(str).str.strip()
         
-    dept_col = next((c for c in df.columns if c.lower() in ["department", "dept"]), None)
-    if not dept_col:
-        df["Department"] = "Operations"  # Default
-    else:
-        df["Department"] = df[dept_col].astype(str).str.strip()
+    df["Department"] = department
 
-    # Convert numeric fields
-    df["Billing Amount"] = pd.to_numeric(df["Billing Amount"], errors='coerce').fillna(0.0)
-    df["Expense"] = pd.to_numeric(df["Expense"], errors='coerce').fillna(0.0)
-    df["Profit"] = pd.to_numeric(df["Profit"], errors='coerce').fillna(0.0)
-    
-    # Standardize Date column format
-    def format_date(d_val):
+    def clean_numeric(val):
+        import re
+        if pd.isna(val):
+            return 0.0
+        if isinstance(val, (int, float)):
+            return float(val)
+        s = str(val).strip()
+        s = re.sub(r'[^\d.-]', '', s)
         try:
-            return pd.to_datetime(d_val).strftime("%Y-%m-%d")
-        except Exception:
-            return str(d_val)
-            
-    df["Date"] = df["Date"].apply(format_date)
-    
-    report_id = "RPT-" + datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
-    
-    # Store records in MongoDB
+            return float(s) if s else 0.0
+        except ValueError:
+            return 0.0
+
+    report_id = "RPT-" + datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S") + "-" + str(ObjectId())[-6:]
     records = df.to_dict(orient="records")
-    for r in records:
-        r["reportId"] = report_id
-        r["uploadedBy"] = user["email"]
-        r["uploadedAt"] = datetime.now(timezone.utc).isoformat()
-        # Ensure database fields are camelCase or match standard schema
-        r["agentName"] = r.pop("Agent Name", "N/A")
-        r["clientName"] = r.pop("Client Name", "N/A")
-        r["jobType"] = r.pop("Job Type", "N/A")
-        r["status"] = r.pop("Status", "N/A")
-        r["jobNo"] = r.pop("Job No", "N/A")
-        r["billingAmount"] = float(r.pop("Billing Amount", 0.0))
-        r["expense"] = float(r.pop("Expense", 0.0))
-        r["profit"] = float(r.pop("Profit", 0.0))
-        r["date"] = r.pop("Date", "")
-        r["branch"] = r.pop("Branch", "Chennai")
-        r["department"] = r.pop("Department", "Operations")
+    
+    valid_records = []
+    failed_records = []
+    seen_ids = set()
+    start_time = datetime.now()
+    
+    id_field = dept_schema["required"][0] if dept_schema["required"] else dept_schema["fields"][0]
+    date_fields = dept_schema["date"]
+    numeric_fields = dept_schema["numeric"]
+    
+    for idx, r in enumerate(records):
+        row_num = idx + 1
         
-    await reports_collection.insert_many(records)
+        id_val = str(r.get(id_field, "")).strip()
+        
+        # 1. Empty row check
+        is_empty_row = (not id_val or id_val.lower() in ["", "nan", "null"])
+        if is_empty_row:
+            all_num_zero = True
+            for num_f in numeric_fields:
+                val = r.get(num_f, 0.0)
+                if clean_numeric(val) != 0:
+                    all_num_zero = False
+                    break
+            if all_num_zero:
+                continue
+                
+        # 2. Duplicate identifier check in spreadsheet
+        if not id_val or id_val.lower() in ["", "nan", "n/a", "null"]:
+            failed_records.append({
+                "row": row_num,
+                "reason": f"Missing or empty required identifier: '{id_field}'"
+            })
+            continue
+            
+        if id_val in seen_ids:
+            failed_records.append({
+                "row": row_num,
+                "reason": f"Duplicate '{id_field}' in spreadsheet: '{id_val}'"
+            })
+            continue
+        seen_ids.add(id_val)
+
+        # 3. Invalid Date checks
+        date_error = False
+        formatted_dates = {}
+        for date_f in date_fields:
+            date_val = str(r.get(date_f, "")).strip()
+            if not date_val or date_val.lower() in ["", "nan", "null", "n/a"]:
+                if date_f in dept_schema["required"]:
+                    failed_records.append({
+                        "row": row_num,
+                        "reason": f"Missing required date field '{date_f}'"
+                    })
+                    date_error = True
+                    break
+                else:
+                    formatted_dates[date_f] = ""
+                    continue
+            try:
+                parsed_dt = pd.to_datetime(date_val, errors="raise")
+                formatted_dates[date_f] = parsed_dt.strftime("%Y-%m-%d")
+            except Exception:
+                failed_records.append({
+                    "row": row_num,
+                    "reason": f"Invalid or unparseable format for date field '{date_f}': '{date_val}'"
+                })
+                date_error = True
+                break
+                
+        if date_error:
+            continue
+
+        # 4. Numeric validation
+        num_error = False
+        clean_nums = {}
+        for num_f in numeric_fields:
+            val = r.get(num_f, 0.0)
+            try:
+                num_val = clean_numeric(val)
+                if num_f in ["Billing Amount", "Freight Cost", "Quotation Amount", "Salary"] and num_val < 0:
+                    failed_records.append({
+                        "row": row_num,
+                        "reason": f"Negative amount is invalid for field '{num_f}': '{num_val}'"
+                    })
+                    num_error = True
+                    break
+                clean_nums[num_f] = num_val
+            except Exception:
+                failed_records.append({
+                    "row": row_num,
+                    "reason": f"Non-numeric values in field '{num_f}'"
+                })
+                num_error = True
+                break
+                
+        if num_error:
+            continue
+
+        # Create record document
+        record_doc = {
+            "reportId": report_id,
+            "uploadedBy": user["email"],
+            "uploadedAt": datetime.now(timezone.utc).isoformat(),
+            "branch": str(r.get("Branch", "Chennai")).strip(),
+            "department": department
+        }
+        
+        # Save all department schema fields
+        for field in dept_schema["fields"]:
+            val = r.get(field)
+            if field in numeric_fields:
+                val = clean_nums.get(field, 0.0)
+            elif field in date_fields:
+                val = formatted_dates.get(field, "")
+            else:
+                val = str(val).strip() if val is not None else ""
+            
+            record_doc[field] = val
+            record_doc[to_camel_case(field)] = val
+            
+        # Save standard compatibility fields
+        std_map = get_standard_fields_mapping(department)
+        for dept_f, std_key in std_map.items():
+            record_doc[std_key] = record_doc[to_camel_case(dept_f)]
+            
+        # Standard default fallbacks
+        if "jobNo" not in record_doc:
+            record_doc["jobNo"] = id_val
+        if "date" not in record_doc:
+            first_date_val = next((formatted_dates[dfld] for dfld in date_fields if formatted_dates.get(dfld)), "")
+            record_doc["date"] = first_date_val if first_date_val else datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        if "clientName" not in record_doc:
+            record_doc["clientName"] = "N/A"
+        if "agentName" not in record_doc:
+            record_doc["agentName"] = "N/A"
+        if "jobType" not in record_doc:
+            record_doc["jobType"] = "N/A"
+        if "status" not in record_doc:
+            record_doc["status"] = "N/A"
+        if "billingAmount" not in record_doc:
+            record_doc["billingAmount"] = 0.0
+        if "expense" not in record_doc:
+            record_doc["expense"] = 0.0
+        if "profit" not in record_doc:
+            record_doc["profit"] = record_doc["billingAmount"] - record_doc["expense"]
+            
+        valid_records.append(record_doc)
+
+    # Store valid records in MongoDB/Memory Database in batches of 1,000
+    batch_size = 1000
+    inserted_count = 0
+    if valid_records:
+        for i in range(0, len(valid_records), batch_size):
+            batch = valid_records[i : i + batch_size]
+            await reports_collection.insert_many(batch)
+            inserted_count += len(batch)
+            
+    end_time = datetime.now()
+    upload_duration = (end_time - start_time).total_seconds()
     
     # Register Version
     version_doc = {
@@ -300,18 +632,34 @@ async def confirm_column_mapping(req: Dict[str, Any], user: dict = Depends(get_c
         "description": description,
         "uploadedBy": user["email"],
         "uploadedAt": datetime.now(timezone.utc).isoformat(),
-        "totalRecords": len(records),
+        "totalRecords": inserted_count,
         "isActive": True,
         "isArchived": False,
-        "createdAt": datetime.now(timezone.utc).isoformat()
+        "createdAt": datetime.now(timezone.utc).isoformat(),
+        "department": department
     }
     await report_versions_collection.insert_one(version_doc)
     
     # Deactivate other report versions if requested
     await report_versions_collection.update_many({"reportId": {"$ne": report_id}}, {"$set": {"isActive": False}})
     
-    await create_activity_log(user, "REPORT_VERSION_CREATED", f"Uploaded version {report_id} with {len(records)} records")
-    return {"message": "Column mapping saved and records inserted successfully", "reportId": report_id, "totalRecords": len(records)}
+    failed_records_count = len(failed_records)
+    # Security Audit Log (Step 7)
+    await create_activity_log(
+        user, 
+        "REPORT_UPLOADED", 
+        f"Uploaded report '{report_name}' (ID: {report_id}) for department '{department}'. Total rows: {len(records)}, Inserted: {inserted_count}, Failed rows: {failed_records_count}"
+    )
+    
+    return {
+        "message": "Column mapping saved and records inserted successfully", 
+        "reportId": report_id, 
+        "totalRows": len(records),
+        "insertedRows": inserted_count,
+        "failedRows": failed_records_count,
+        "uploadTime": round(upload_duration, 2),
+        "failedDetails": failed_records[:20]  # first 20 errors for user diagnostics
+    }
 
 # ----------------- REPORT & FILTERS ENDPOINTS -----------------
 # Access control helper
@@ -341,7 +689,7 @@ async def get_report_versions(user: dict = Depends(get_current_user)):
 async def create_report_version(req: ReportVersionRequest, user: dict = Depends(get_current_user)):
     if user["role"] != "Admin":
         raise HTTPException(status_code=403, detail="Only Admins can manage report versions")
-    report_id = "RPT-" + datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
+    report_id = "RPT-" + datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S") + "-" + str(ObjectId())[-6:]
     version_doc = {
         "reportId": report_id,
         "reportName": req.reportName,
@@ -381,7 +729,7 @@ async def delete_report_version(report_id: str, user: dict = Depends(get_current
         raise HTTPException(status_code=403, detail="Only Admins can delete report versions")
     await report_versions_collection.delete_one({"reportId": report_id})
     await reports_collection.delete_many({"reportId": report_id})
-    await create_activity_log(user, "REPORT_VERSION_DELETED", f"Deleted report version {report_id} and its associated records")
+    await create_activity_log(user, "DATA_DELETED", f"Deleted report version {report_id} and its associated records")
     return {"message": "Report version and associated records deleted permanently"}
 
 @app.get("/filters")
@@ -532,8 +880,26 @@ async def filter_report(req: FilterRequest, user: dict = Depends(get_current_use
     query = build_filter_query(filters_dict, user)
     query = await apply_user_data_scope(query, user)
     
+    # Count total records for pagination info in UI
+    total_records = await reports_collection.count_documents(query)
+    
     cursor = reports_collection.find(query)
-    results = await cursor.to_list(1000)
+    
+    # Backend Sorting
+    if req.sortBy:
+        direction = -1 if req.sortOrder == "desc" else 1
+        cursor = cursor.sort(req.sortBy, direction)
+    else:
+        cursor = cursor.sort("date", -1)
+        
+    # Backend Pagination
+    page = req.page or 1
+    page_size = req.pageSize or 100000
+    
+    if req.page and req.pageSize:
+        cursor = cursor.skip((page - 1) * page_size).limit(page_size)
+        
+    results = await cursor.to_list(page_size if req.page and req.pageSize else 10000)
     
     serialized_results = serialize_list(results)
 
@@ -545,9 +911,171 @@ async def filter_report(req: FilterRequest, user: dict = Depends(get_current_use
     
     await create_activity_log(user, "FILTERS_APPLIED", f"Queried filtered data for report version {report_id}")
     return {
-        "total_records": len(serialized_results),
+        "total_records": total_records,
         "data": serialized_results
     }
+
+@app.get("/reports/{report_id}/delay-risk")
+async def get_report_delay_risk(report_id: str, user: dict = Depends(get_current_user)):
+    accessible_ids = await get_user_accessible_report_ids(user)
+    if report_id not in accessible_ids:
+        raise HTTPException(status_code=403, detail="You do not have access to this report version")
+        
+    records = await reports_collection.find({"reportId": report_id}).to_list(10000)
+    if not records:
+        return {}
+        
+    from ml_stack import MLStack
+    ml_stack = MLStack()
+    df = pd.DataFrame(serialize_list(records))
+    
+    predictions = ml_stack.predict_delay_risks(df)
+    return predictions
+
+@app.get("/reports/{report_id}/client-alerts")
+async def get_report_client_alerts(report_id: str, user: dict = Depends(get_current_user)):
+    accessible_ids = await get_user_accessible_report_ids(user)
+    if report_id not in accessible_ids:
+        raise HTTPException(status_code=403, detail="You do not have access to this report version")
+        
+    current_ver = await report_versions_collection.find_one({"reportId": report_id})
+    if not current_ver:
+        raise HTTPException(status_code=404, detail="Report version not found")
+        
+    department = current_ver.get("department", "Operations")
+    
+    records = await reports_collection.find({"reportId": report_id}).to_list(10000)
+    if not records:
+        return []
+        
+    df = pd.DataFrame(serialize_list(records))
+    
+    client_col = "Client Name" if "Client Name" in df.columns else ("clientName" if "clientName" in df.columns else None)
+    billing_col = "Billing Amount" if "Billing Amount" in df.columns else ("billingAmount" if "billingAmount" in df.columns else None)
+    status_col = "Status" if "Status" in df.columns else ("status" if "status" in df.columns else None)
+    
+    if not client_col:
+        return []
+        
+    if billing_col:
+        df[billing_col] = pd.to_numeric(df[billing_col], errors="coerce").fillna(0)
+    else:
+        df["_billing"] = 0
+        billing_col = "_billing"
+        
+    df[client_col] = df[client_col].astype(str).str.strip()
+    df = df[df[client_col] != ""]
+    
+    if df.empty:
+        return []
+        
+    client_groups = df.groupby(client_col).agg(
+        jobs_count=(client_col, "count"),
+        total_billing=(billing_col, "sum")
+    ).reset_index()
+    
+    other_versions = await report_versions_collection.find({
+        "department": department,
+        "isArchived": False,
+        "reportId": {"$ne": report_id}
+    }).to_list(100)
+    
+    other_report_ids = [v["reportId"] for v in other_versions]
+    
+    historical_data = {}
+    if other_report_ids:
+        hist_records = await reports_collection.find({"reportId": {"$in": other_report_ids}}).to_list(20000)
+        if hist_records:
+            hdf = pd.DataFrame(serialize_list(hist_records))
+            h_client_col = "Client Name" if "Client Name" in hdf.columns else ("clientName" if "clientName" in hdf.columns else None)
+            h_billing_col = "Billing Amount" if "Billing Amount" in hdf.columns else ("billingAmount" if "billingAmount" in hdf.columns else None)
+            
+            if h_client_col:
+                if h_billing_col:
+                    hdf[h_billing_col] = pd.to_numeric(hdf[h_billing_col], errors="coerce").fillna(0)
+                else:
+                    hdf["_billing"] = 0
+                    h_billing_col = "_billing"
+                    
+                hdf[h_client_col] = hdf[h_client_col].astype(str).str.strip()
+                hdf = hdf[hdf[h_client_col] != ""]
+                
+                hist_grouped = hdf.groupby(["reportId", h_client_col]).agg(
+                    jobs_count=(h_client_col, "count"),
+                    total_billing=(h_billing_col, "sum")
+                ).reset_index()
+                
+                hist_averages = hist_grouped.groupby(h_client_col).agg(
+                    avg_jobs=("jobs_count", "mean"),
+                    avg_billing=("total_billing", "mean")
+                ).to_dict(orient="index")
+                historical_data = hist_averages
+                
+    alerts = []
+    
+    delayed_counts = {}
+    if status_col:
+        delayed_df = df[df[status_col].astype(str).str.lower().str.contains("delay")]
+        delayed_counts = delayed_df.groupby(client_col).size().to_dict()
+        
+    for _, row in client_groups.iterrows():
+        client = row[client_col]
+        jobs = row["jobs_count"]
+        billing = row["total_billing"]
+        
+        delayed = delayed_counts.get(client, 0)
+        delay_ratio = delayed / jobs if jobs > 0 else 0
+        
+        hist = historical_data.get(client)
+        
+        if hist:
+            avg_jobs = hist["avg_jobs"]
+            avg_billing = hist["avg_billing"]
+            
+            if jobs < avg_jobs * 0.8:
+                pct_drop = round((1 - jobs / avg_jobs) * 100)
+                alerts.append({
+                    "clientName": client,
+                    "type": "Churn Risk",
+                    "severity": "High" if pct_drop > 40 else "Medium",
+                    "title": f"Significant Drop in Bookings ({pct_drop}% decrease)",
+                    "message": f"Client {client} has booked {jobs} jobs this period, compared to their historical average of {avg_jobs:.1f} jobs. Billing has dropped to ₹{billing:,.0f} (average: ₹{avg_billing:,.0f}).",
+                    "recommendation": "Initiate direct client follow-up, evaluate pricing changes, or schedule a performance review."
+                })
+            elif jobs > avg_jobs * 1.2:
+                pct_gain = round((jobs / avg_jobs - 1) * 100)
+                alerts.append({
+                    "clientName": client,
+                    "type": "Growth Alert",
+                    "severity": "Low",
+                    "title": f"High Booking Growth ({pct_gain}% increase)",
+                    "message": f"Client {client} has increased their volume to {jobs} jobs this period (historical average: {avg_jobs:.1f}). Billing increased to ₹{billing:,.0f} (average: ₹{avg_billing:,.0f}).",
+                    "recommendation": "Assign priority customer manager, offer volume loyalty incentives, and ensure delivery capacity."
+                })
+        else:
+            alerts.append({
+                "clientName": client,
+                "type": "Growth Alert",
+                "severity": "Low",
+                "title": "New Active Client Detected",
+                "message": f"Client {client} has booked {jobs} jobs for a total billing of ₹{billing:,.0f} with no matching historical booking record in previous report versions.",
+                "recommendation": "Assign account manager, establish SLA guidelines, and trigger proactive onboarding checklist."
+            })
+            
+        if delay_ratio >= 0.25 and jobs >= 2:
+            alerts.append({
+                "clientName": client,
+                "type": "Quality Risk",
+                "severity": "High" if delay_ratio > 0.4 else "Medium",
+                "title": f"High Delivery Delay Rate ({round(delay_ratio*100)}%)",
+                "message": f"Client {client} has experienced delays on {delayed} of their {jobs} jobs this period.",
+                "recommendation": "Review agent logs for delayed routes, issue proactive apology/waiver, and prioritize current shipment routes."
+            })
+            
+    severity_order = {"High": 0, "Medium": 1, "Low": 2}
+    alerts.sort(key=lambda x: severity_order.get(x["severity"], 3))
+    
+    return alerts
 
 # ----------------- EXPORTS & DOWNLOADS ENDPOINTS -----------------
 @app.post("/download-excel")
@@ -563,7 +1091,7 @@ async def download_excel(filters: Dict[str, Any], user: dict = Depends(get_curre
     query = build_filter_query(filters, user)
     query = await apply_user_data_scope(query, user)
     cursor = reports_collection.find(query)
-    results = await cursor.to_list(5000)
+    results = await cursor.to_list(100000)
     
     df = pd.DataFrame(serialize_list(results))
     if not df.empty:
@@ -592,12 +1120,62 @@ async def download_excel(filters: Dict[str, Any], user: dict = Depends(get_curre
         
     output.seek(0)
     
-    await create_activity_log(user, "EXCEL_REPORT_DOWNLOADED", f"Downloaded Excel sub-report for {report_id}")
+    await create_activity_log(user, "REPORT_EXPORTED", f"Downloaded Excel sub-report for {report_id} ({len(results)} rows)")
     
     return StreamingResponse(
         output,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": "attachment; filename=sub_report.xlsx"}
+    )
+
+@app.post("/download-csv")
+async def download_csv(filters: Dict[str, Any], user: dict = Depends(get_current_user)):
+    if user["role"] == "Staff":
+        raise HTTPException(status_code=403, detail="Staff are not permitted to export data")
+        
+    report_id = filters.get("reportId")
+    accessible_ids = await get_user_accessible_report_ids(user)
+    if report_id not in accessible_ids:
+        raise HTTPException(status_code=403, detail="You do not have access to this report data")
+        
+    query = build_filter_query(filters, user)
+    query = await apply_user_data_scope(query, user)
+    
+    async def csv_generator():
+        headers = ["Agent Name", "Client Name", "Job Type", "Status", "Job No", "Billing Amount", "Expense", "Profit", "Date", "Branch", "Department"]
+        import csv
+        output = io.StringIO()
+        writer = csv.writer(output)
+        writer.writerow(headers)
+        yield output.getvalue()
+        output.truncate(0)
+        output.seek(0)
+        
+        cursor = reports_collection.find(query)
+        async for record in cursor:
+            writer.writerow([
+                record.get("agentName", "N/A"),
+                record.get("clientName", "N/A"),
+                record.get("jobType", "N/A"),
+                record.get("status", "N/A"),
+                record.get("jobNo", "N/A"),
+                record.get("billingAmount", 0.0),
+                record.get("expense", 0.0),
+                record.get("profit", 0.0),
+                record.get("date", ""),
+                record.get("branch", "Chennai"),
+                record.get("department", "Operations")
+            ])
+            yield output.getvalue()
+            output.truncate(0)
+            output.seek(0)
+
+    await create_activity_log(user, "REPORT_EXPORTED", f"Streamed CSV sub-report for {report_id}")
+    
+    return StreamingResponse(
+        csv_generator(),
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=sub_report.csv"}
     )
 
 @app.post("/download-pdf")
@@ -613,7 +1191,7 @@ async def download_pdf(filters: Dict[str, Any], user: dict = Depends(get_current
     query = build_filter_query(filters, user)
     query = await apply_user_data_scope(query, user)
     cursor = reports_collection.find(query)
-    results = await cursor.to_list(5000)
+    results = await cursor.to_list(100000)
     
     # Calculate summary stats for the PDF header
     total_jobs = len(results)
@@ -675,11 +1253,30 @@ async def download_pdf(filters: Dict[str, Any], user: dict = Depends(get_current
     story.append(summary_table)
     story.append(Spacer(1, 15))
     
+    # Add warning notice if data is sliced
+    if total_jobs > 100:
+        warning_style = ParagraphStyle(
+            'WarningText',
+            parent=styles['Normal'],
+            fontName='Helvetica-Oblique',
+            fontSize=10,
+            leading=14,
+            textColor=colors.HexColor('#b45309'),
+            spaceBefore=5,
+            spaceAfter=10
+        )
+        story.append(Paragraph(
+            f"Showing first 100 rows of {total_jobs} total filtered records. Use Excel or CSV export to download the complete dataset.",
+            warning_style
+        ))
+        story.append(Spacer(1, 10))
+
     # Data Table
     table_headers = ["Job No", "Agent Name", "Client Name", "Job Type", "Status", "Billing", "Expense", "Profit", "Date", "Branch"]
     data_rows = [table_headers]
     
-    for row in results:
+    sliced_results = results[:100]
+    for row in sliced_results:
         data_rows.append([
             row["jobNo"],
             row["agentName"],
@@ -712,7 +1309,7 @@ async def download_pdf(filters: Dict[str, Any], user: dict = Depends(get_current
     doc.build(story)
     buffer.seek(0)
     
-    await create_activity_log(user, "PDF_REPORT_DOWNLOADED", f"Downloaded PDF sub-report for {report_id}")
+    await create_activity_log(user, "REPORT_EXPORTED", f"Downloaded PDF sub-report for {report_id} (sliced to first 100 rows of {total_jobs})")
     
     return StreamingResponse(
         buffer,
@@ -738,6 +1335,8 @@ async def get_analytics(reportId: Optional[str] = None, user: dict = Depends(get
     if reportId not in accessible_ids:
         raise HTTPException(status_code=403, detail="You do not have access to this report data")
         
+    await create_activity_log(user, "PROFIT_VIEWED", f"Viewed analytics/profit data for report {reportId}")
+    
     query = await apply_user_data_scope({"reportId": reportId}, user)
     
     # Enforce Staff masking
@@ -1179,25 +1778,7 @@ async def revoke_report_access(access_id: str, user: dict = Depends(get_current_
     await create_activity_log(user, "REPORT_ACCESS_REVOKED", f"Revoked report access rule {access_id}")
     return {"message": "Access revoked successfully"}
 
-# 8. Backups & Restore
-@app.get("/backups")
-async def get_backups(user: dict = Depends(get_current_user)):
-    backups = await backups_collection.find({}).to_list(100)
-    return serialize_list(backups)
-
-@app.post("/backups/create")
-async def create_backup(user: dict = Depends(get_current_user)):
-    if user["role"] != "Admin":
-        raise HTTPException(status_code=403, detail="Only Admins can create backups")
-    backup_id = "BAK-" + datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
-    backup_doc = {
-        "backupId": backup_id,
-        "createdBy": user["email"],
-        "createdAt": datetime.now(timezone.utc).isoformat()
-    }
-    await backups_collection.insert_one(backup_doc)
-    await create_activity_log(user, "BACKUP_CREATED", f"Created database backup: {backup_id}")
-    return serialize_doc(backup_doc)
+# Backups and Restore are handled by backup_engine router
 
 
 FRONTEND_DIST = Path(__file__).resolve().parent.parent / "frontend" / "dist"

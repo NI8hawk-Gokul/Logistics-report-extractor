@@ -179,7 +179,7 @@ export function OperationsPage({ user }) {
           <div className="table-wrap"><table><thead><tr><th>{tab === "jobs" ? "Job" : "Record"}</th><th>Details</th><th>Status</th>{user.role !== "Staff" && ["payments", "approvals"].includes(tab) && <th>Actions</th>}</tr></thead><tbody>
             {items.map((item) => <tr key={item.id || item.approvalId}><td><strong>{primary(item)}</strong>{item.amount != null && <span className="cell-subtitle">{money.format(item.amount)}</span>}</td><td>{secondary(item) || item.description || "No additional details"}</td><td>{item.status ? <StatusBadge value={item.status} /> : "-"}</td>{user.role !== "Staff" && ["payments", "approvals"].includes(tab) && <td className="row-actions">{tab === "payments" && item.status !== "Paid" && <button className="btn-secondary" onClick={() => action(item, "paid")}>Mark paid</button>}{tab === "approvals" && item.status === "Pending" && <><button onClick={() => action(item, "approve")}>Approve</button><button className="btn-danger-light" onClick={() => action(item, "reject")}>Reject</button></>}</td>}</tr>)}
           </tbody></table></div>
-        ) : <EmptyState title={`No ${config.title.toLowerCase()} found`} message={`Create the first ${config.title.slice(0, -1).toLowerCase()} record when work begins.`} />}
+        ) : <EmptyState title={`No ${config.title.toLowerCase()} found`} message={`Create the first ${config.title.slice(0, -1).toLowerCase()} record when work begins.`} action={user.role !== "Staff" && <button onClick={() => setShowForm(true)}>Add {config.title.slice(0, -1).toLowerCase()}</button>} />}
       </section>
     </>
   );
@@ -218,7 +218,7 @@ export function DocumentsPage({ user, reportId }) {
           {error && <div className="inline-alert error">{error}</div>}
           {loading ? <div className="loading-panel">Loading documents...</div> : items.length ? <div className="item-list">
             {items.map((item) => <div className="list-item" key={item.id}><div className="list-icon">D</div><div><strong>{item.documentName}</strong><span>{item.documentType} · {Math.max(1, Math.round((item.fileSize || 0) / 1024))} KB · {item.uploadedBy}</span></div><button className="btn-secondary" onClick={() => download(item)}>Download</button>{user.role !== "Staff" && <button className="btn-danger-light" onClick={() => remove(item.id)}>Delete</button>}</div>)}
-          </div> : <EmptyState title="No documents uploaded" message="Add supporting files using the upload panel." />}
+          </div> : <EmptyState title="No documents uploaded" message="Add supporting files using the upload panel." action={<button onClick={() => document.querySelector(".file-field input")?.click()}>Choose file</button>} />}
         </section>
         <aside className="card panel form-panel">
           <p className="eyebrow">Upload file</p><h2>Add a document</h2>
@@ -284,6 +284,16 @@ export function AdminPage({ versions, onRefreshVersions }) {
   const toggleUser = async (item) => { await api.patch(`/users/${item.id}/${item.isActive === false ? "reactivate" : "deactivate"}`); users.reload(); };
   const versionAction = async (item, action) => { await api[action === "delete" ? "delete" : "patch"](`/report-versions/${item.reportId}/${action === "delete" ? "" : action}`.replace(/\/$/, "")); onRefreshVersions(); };
   const saveSettings = async () => { await api.patch("/settings", { settings }); setNotice("Settings saved."); };
+  const restoreBackup = async (item) => {
+    if (window.confirm(`Are you sure you want to restore backup ${item.backupId}? This will overwrite the current database!`)) {
+      try {
+        await api.post(`/backups/${item.backupId}/restore`);
+        setNotice(`Database restored from recovery point ${item.backupId}.`);
+      } catch (err) {
+        setNotice(err.response?.data?.detail || "Could not restore backup.");
+      }
+    }
+  };
 
   const tabs = [["users", "Users"], ["versions", "Report versions"], ["organization", "Organization"], ["access", "Access rules"], ["settings", "Settings"], ["integrations", "Integrations"], ["backups", "Backups"], ["validation", "Validation"]];
   return (
@@ -307,7 +317,7 @@ export function AdminPage({ versions, onRefreshVersions }) {
 
       {tab === "integrations" && <section className="card panel"><div className="panel-heading"><div><p className="eyebrow">External systems</p><h2>{integrations.items.length} integrations</h2></div></div>{integrations.items.length ? <div className="item-list">{integrations.items.map((item) => <div className="list-item" key={item.id}><div className="list-icon">I</div><div><strong>{item.name}</strong><span>{item.integrationType} · {item.baseUrl}</span></div><StatusBadge value={item.isActive ? "Active" : "Inactive"} /><button className="btn-secondary" onClick={async () => { const { data } = await api.post(`/api-integrations/${item.id}/test`); setNotice(data.message); }}>Test</button></div>)}</div> : <EmptyState title="No integrations configured" message="API connection records will appear here once configured." />}</section>}
 
-      {tab === "backups" && <section className="card panel"><div className="panel-heading"><div><p className="eyebrow">Recovery points</p><h2>{backups.items.length} backups</h2></div><button onClick={async () => { await api.post("/backups/create"); backups.reload(); }}>Create backup</button></div>{backups.items.length ? <div className="item-list">{backups.items.map((item) => <div className="list-item" key={item.id}><div className="list-icon">B</div><div><strong>{item.backupName || item.backupId}</strong><span>{item.createdAt} · {item.status}</span></div></div>)}</div> : <EmptyState title="No recovery points" message="Create a metadata backup before significant administrative changes." />}</section>}
+      {tab === "backups" && <section className="card panel"><div className="panel-heading"><div><p className="eyebrow">Recovery points</p><h2>{backups.items.length} backups</h2></div><button onClick={async () => { await api.post("/backups/create"); backups.reload(); }}>Create backup</button></div>{backups.items.length ? <div className="item-list">{backups.items.map((item) => <div className="list-item" key={item.id}><div className="list-icon">B</div><div><strong>{item.backupName || item.backupId}</strong><span>{item.createdAt} · {item.status}</span></div><button className="btn-secondary" onClick={() => restoreBackup(item)}>Restore</button></div>)}</div> : <EmptyState title="No recovery points" message="Create a metadata backup before significant administrative changes." />}</section>}
 
       {tab === "validation" && <section className="card panel"><div className="panel-heading"><div><p className="eyebrow">Data quality</p><h2>{validation.items.length} validation runs</h2></div></div>{validation.items.length ? <div className="item-list">{validation.items.map((item) => <div className="list-item" key={item.id}><div className={`list-icon ${item.valid ? "success" : ""}`}>V</div><div><strong>{item.filename}</strong><span>{item.totalRows} rows · {item.duplicateJobNumbers} duplicate jobs · {(item.missingColumns || []).length} missing columns</span></div><StatusBadge value={item.valid ? "Valid" : "Needs attention"} /></div>)}</div> : <EmptyState title="No validation history" message="Validation results from the upload quality check will appear here." />}</section>}
     </>

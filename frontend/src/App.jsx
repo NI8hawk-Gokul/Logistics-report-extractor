@@ -5,6 +5,9 @@ import AppShell from "./components/AppShell";
 import AIChatDrawer from "./components/AIChatDrawer";
 import Settings from "./components/Settings";
 import { AnalyticsPage, OverviewPage, ReportsPage, UploadPage } from "./pages/CorePages";
+import ClientAnalytics from "./pages/ClientAnalytics";
+import PredictionAnalysis from "./pages/PredictionAnalysis";
+import VersionComparison from "./pages/VersionComparison";
 import {
   ActivityLogsPage,
   AdminPage,
@@ -18,7 +21,10 @@ import {
 const views = {
   overview: OverviewPage,
   analytics: AnalyticsPage,
+  clientAnalytics: ClientAnalytics,
+  predictionAnalysis: PredictionAnalysis,
   reports: ReportsPage,
+  versionComparison: VersionComparison,
   upload: UploadPage,
   templates: TemplatesPage,
   schedules: SchedulesPage,
@@ -32,9 +38,10 @@ const views = {
 
 const roleViews = {
   Admin: Object.keys(views),
-  Manager: ["overview", "analytics", "reports", "templates", "schedules", "operations", "documents", "notifications", "settings"],
-  Staff: ["overview", "analytics", "reports", "templates", "operations", "documents", "notifications", "settings"],
+  Manager: ["overview", "analytics", "clientAnalytics", "predictionAnalysis", "reports", "versionComparison", "templates", "schedules", "operations", "documents", "notifications", "settings"],
+  Staff: ["overview", "analytics", "clientAnalytics", "predictionAnalysis", "reports", "templates", "operations", "documents", "notifications", "settings"],
 };
+
 
 function LoginScreen({ onLogin }) {
   const [email, setEmail] = useState("admin@logistics.com");
@@ -132,6 +139,7 @@ function App() {
     try { return JSON.parse(localStorage.getItem("user")); } catch { return null; }
   });
   const [versions, setVersions] = useState([]);
+  const [dbMode, setDbMode] = useState("mongodb");
   const [selectedReportId, setSelectedReportId] = useState(localStorage.getItem("selectedReportId") || "");
   const [activeView, setActiveView] = useState(() => window.location.hash.replace("#/", "") || "overview");
   const [loadingSession, setLoadingSession] = useState(Boolean(localStorage.getItem("token")));
@@ -177,6 +185,12 @@ function App() {
   }, []);
 
   useEffect(() => {
+    api.get("/health")
+      .then(({ data }) => setDbMode(data.database || "mongodb"))
+      .catch(() => setDbMode("mongodb"));
+  }, []);
+
+  useEffect(() => {
     if (user) refreshVersions();
   }, [user]);
 
@@ -189,8 +203,17 @@ function App() {
   useEffect(() => {
     if (!user) return;
     const allowed = roleViews[user.role] || roleViews.Staff;
-    if (!allowed.includes(activeView)) navigate("overview");
-  }, [activeView, user]);
+    if (!allowed.includes(activeView)) {
+      navigate("overview");
+      return;
+    }
+    if (activeView === "clientAnalytics" && selectedReportId) {
+      const activeVer = versions.find((v) => v.reportId === selectedReportId);
+      if (activeVer && activeVer.department && !["Operations", "Customs Clearance", "Documentation", "Sales & Marketing"].includes(activeVer.department)) {
+        navigate("overview");
+      }
+    }
+  }, [activeView, user, selectedReportId, versions]);
 
   const navigate = (view) => {
     window.location.hash = `/${view}`;
@@ -220,6 +243,7 @@ function App() {
     onNavigate: navigate,
     onRefreshVersions: refreshVersions,
     onUploaded: handleUploaded,
+    dbMode,
   };
 
   return (
@@ -231,6 +255,7 @@ function App() {
       selectedReportId={selectedReportId}
       onReportChange={changeReport}
       onLogout={logout}
+      dbMode={dbMode}
     >
       <ActivePage {...sharedProps} />
       <AIChatDrawer reportId={selectedReportId} />
